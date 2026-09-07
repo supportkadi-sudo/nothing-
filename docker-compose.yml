@@ -22,7 +22,7 @@ services:
       ORDER_TTL_MINUTES: ${ORDER_TTL_MINUTES:-5}
       BANK_TIMEZONE: ${BANK_TIMEZONE:-Asia/Tashkent}
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8010:8000"
     depends_on:
       db:
         condition: service_healthy
