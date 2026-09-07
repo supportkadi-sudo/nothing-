@@ -1,17 +1,33 @@
 from pathlib import Path
+from secrets import compare_digest
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .db import Base, SessionLocal, engine, get_db
-from .models import Order, Product
+from .models import Order, PaymentMessage, Product
+from .notifications import notify_paid_order
 from .payments import create_order as create_order_record
-from .payments import expire_stale_orders
-from .schemas import OrderCreate, OrderOut, ProductOut, PublicConfigOut, RecentOrderOut, StatsOut
-from .settings import ORDER_TTL_MINUTES, PAYMENT_CARD_LABEL, PAYMENT_CARD_NUMBER
+from .payments import expire_stale_orders, match_payment, parse_payment_message
+from .schemas import (
+    InternalPaymentMessageIn,
+    InternalPaymentMessageOut,
+    OrderCreate,
+    OrderOut,
+    ProductOut,
+    PublicConfigOut,
+    RecentOrderOut,
+    StatsOut,
+)
+from .settings import (
+    INTERNAL_PAYMENT_SECRET,
+    ORDER_TTL_MINUTES,
+    PAYMENT_CARD_LABEL,
+    PAYMENT_CARD_NUMBER,
+)
 
 app = FastAPI(title='NOTHING by KADI', version='1.0.0')
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -78,6 +94,51 @@ def get_order(public_id: str, db: Session = Depends(get_db)):
     if not order:
         raise HTTPException(404, 'Order not found')
     return order
+
+
+@app.post('/api/internal/payment-message', response_model=InternalPaymentMessageOut)
+async def receive_internal_payment_message(
+    payload: InternalPaymentMessageIn,
+    x_internal_payment_secret: str = Header('', alias='X-Internal-Payment-Secret'),
+    db: Session = Depends(get_db),
+):
+    if not INTERNAL_PAYMENT_SECRET:
+        raise HTTPException(503, 'Internal payment relay is not configured')
+    if not compare_digest(x_internal_payment_secret, INTERNAL_PAYMENT_SECRET):
+        raise HTTPException(401, 'Invalid internal payment secret')
+
+    existing = db.scalar(
+        select(PaymentMessage).where(PaymentMessage.event_key == payload.event_id)
+    )
+    if existing:
+        order = db.get(Order, existing.order_id) if existing.order_id else None
+        return InternalPaymentMessageOut(
+            status='duplicate',
+            order_public_id=order.public_id if order else None,
+        )
+
+    parsed = parse_payment_message(payload.text)
+    if not parsed:
+        raise HTTPException(422, 'Unsupported payment message')
+
+    order = match_payment(
+        db,
+        event_key=payload.event_id,
+        raw_text=payload.text,
+        parsed=parsed,
+    )
+    payment = db.scalar(
+        select(PaymentMessage).where(PaymentMessage.event_key == payload.event_id)
+    )
+    status = payment.status if payment else 'unmatched'
+
+    if order:
+        await notify_paid_order(order)
+
+    return InternalPaymentMessageOut(
+        status=status,
+        order_public_id=order.public_id if order else None,
+    )
 
 
 @app.get('/api/stats', response_model=StatsOut)
