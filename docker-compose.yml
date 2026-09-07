@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nothing}
+      POSTGRES_USER: ${POSTGRES_USER:-nothing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nothing}
+    volumes:
+      - nothing_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nothing} -d ${POSTGRES_DB:-nothing}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-nothing}:${POSTGRES_PASSWORD:-nothing}@db:5432/${POSTGRES_DB:-nothing}
+      PAYMENT_CARD_LABEL: ${PAYMENT_CARD_LABEL:-HUMOCARD}
+      PAYMENT_CARD_NUMBER: ${PAYMENT_CARD_NUMBER:-}
+      ORDER_TTL_MINUTES: ${ORDER_TTL_MINUTES:-5}
+      BANK_TIMEZONE: ${BANK_TIMEZONE:-Asia/Tashkent}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  bot:
+    build: .
+    command: ["python", "-m", "app.bot"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-nothing}:${POSTGRES_PASSWORD:-nothing}@db:5432/${POSTGRES_DB:-nothing}
+      BOT_TOKEN: ${BOT_TOKEN:-}
+      ADMIN_TELEGRAM_ID: ${ADMIN_TELEGRAM_ID:-0}
+      ORDER_TTL_MINUTES: ${ORDER_TTL_MINUTES:-5}
+      BANK_TIMEZONE: ${BANK_TIMEZONE:-Asia/Tashkent}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  nothing_db:
