@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ProductOut(BaseModel):
@@ -47,3 +47,13 @@ class PublicConfigOut(BaseModel):
     payment_card_number: str
     payment_card_label: str
     order_ttl_minutes: int
+
+
+class InternalPaymentMessageIn(BaseModel):
+    event_id: str = Field(min_length=1, max_length=180)
+    text: str = Field(min_length=1, max_length=4096)
+
+
+class InternalPaymentMessageOut(BaseModel):
+    status: str
+    order_public_id: str | None = None
