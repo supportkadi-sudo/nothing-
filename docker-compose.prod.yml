@@ -1,0 +1,10 @@
+services:
+  web:
+    networks:
+      - default
+      - kadi_proxy
+
+networks:
+  kadi_proxy:
+    external: true
+    name: ${KADI_DOCKER_NETWORK:-kadi_default}
