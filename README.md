@@ -19,6 +19,12 @@
 - реальные счётчики на лендинге: количество покупок, общая сумма, максимальная покупка и последние оплаченные заказы;
 - PostgreSQL через Docker Compose, SQLite для локальной разработки.
 
+## Прод-домен
+
+`https://nothing.itskadi.uz`
+
+Готовый nginx-конфиг лежит в `deploy/nginx.conf`. Docker публикует FastAPI только на `127.0.0.1:8000`, поэтому наружу приложение должно идти через nginx.
+
 ## Формат банковского сообщения
 
 Парсер рассчитан на такой формат:
@@ -90,8 +96,37 @@ docker compose up -d --build
 Поднимутся:
 
 - `db` — PostgreSQL;
-- `web` — FastAPI + сайт на порту `8000`;
+- `web` — FastAPI + сайт на `127.0.0.1:8000`;
 - `bot` — Telegram Business обработчик.
+
+## Прод-деплой на nothing.itskadi.uz
+
+Сначала DNS A-запись `nothing.itskadi.uz` должна указывать на IP VPS.
+
+```bash
+cd /opt
+git clone git@github.com:supportkadi-sudo/nothing-.git nothing
+cd /opt/nothing
+cp .env.example .env
+nano .env
+```
+
+После заполнения `.env`:
+
+```bash
+docker compose up -d --build
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/nothing.itskadi.uz
+sudo ln -sfn /etc/nginx/sites-available/nothing.itskadi.uz /etc/nginx/sites-enabled/nothing.itskadi.uz
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d nothing.itskadi.uz
+```
+
+Проверка:
+
+```bash
+curl http://127.0.0.1:8000/api/health
+curl -I https://nothing.itskadi.uz
+```
 
 ## API
 
