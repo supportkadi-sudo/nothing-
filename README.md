@@ -2,7 +2,7 @@
 
 Минимальный рабочий магазин, где можно купить абсолютно ничего.
 
-Проект специально оставлен маленьким: обычный HTML/CSS/JS, FastAPI, PostgreSQL и один Telegram Business-бот для подтверждения переводов.
+Проект специально оставлен маленьким: обычный HTML/CSS/JS, FastAPI, PostgreSQL и простой Telegram-бот для уведомлений админу.
 
 ## Что работает
 
@@ -11,10 +11,10 @@
 - создание заказа на 5 минут;
 - уникальная сумма `цена + случайный хвост 1..99` среди активных заказов;
 - автоматическая проверка статуса заказа с сайта;
-- Telegram Business обработчик банковских уведомлений;
+- приём банковских сообщений через защищённый internal relay от существующего KADI Telegram Business bridge;
 - простой парсер банковского сообщения: только сумма `➕` и время `🕓`;
 - матчинг перевода по точной сумме и 5-минутному окну заказа;
-- защита от повторной обработки одного Telegram-сообщения;
+- защита от повторной обработки одного события;
 - уведомление админу после успешного заказа;
 - реальные счётчики на лендинге: количество покупок, общая сумма, максимальная покупка и последние оплаченные заказы;
 - PostgreSQL через Docker Compose, SQLite для локальной разработки.
@@ -23,7 +23,7 @@
 
 `https://nothing.itskadi.uz`
 
-Готовый nginx-конфиг лежит в `deploy/nginx.conf`. Docker публикует FastAPI только на `127.0.0.1:8000`, поэтому наружу приложение должно идти через nginx.
+FastAPI опубликован только на `127.0.0.1:8010`. HTTPS обслуживает существующий nginx KADI.
 
 ## Формат банковского сообщения
 
@@ -44,6 +44,36 @@
 - `20:26 06.09.2026` из строки `🕓`.
 
 Последние цифры карты и баланс после операции не участвуют в матчинге.
+
+## Payment relay
+
+Telegram разрешает один подключённый Business-бот на аккаунт, поэтому NOTHING не требует отдельной Business-привязки.
+
+Поток:
+
+```text
+Telegram Business -> существующий KADI bot -> KADI backend -> Celery relay -> NOTHING internal API
+```
+
+KADI отправляет в NOTHING только `event_id` и исходный текст банковского уведомления. NOTHING сам парсит сумму и банковское время и принимает решение по своему заказу.
+
+Internal endpoint:
+
+```text
+POST /api/internal/payment-message
+X-Internal-Payment-Secret: <shared secret>
+```
+
+Тело:
+
+```json
+{
+  "event_id": "telegram_business_humo:...",
+  "text": "🎉 Пополнение\n➕ 77.000,00 UZS\n..."
+}
+```
+
+Повторный `event_id` не обрабатывается второй раз.
 
 ## Быстрый локальный запуск
 
@@ -73,17 +103,14 @@ ORDER_TTL_MINUTES=5
 BANK_TIMEZONE=Asia/Tashkent
 BOT_TOKEN=123456:telegram-token
 ADMIN_TELEGRAM_ID=123456789
+INTERNAL_PAYMENT_SECRET=generate_random_string_32_chars_min
 ```
 
-`PAYMENT_CARD_NUMBER` должен содержать настоящие реквизиты, которые будут показаны покупателю.
+`PAYMENT_CARD_NUMBER` содержит реквизиты, которые показываются покупателю.
 
-Команда `/whoami` у бота показывает Telegram ID, который можно записать в `ADMIN_TELEGRAM_ID`.
+`INTERNAL_PAYMENT_SECRET` должен совпадать с `NOTHING_RELAY_SECRET` в KADI и храниться только в `.env`.
 
-## Telegram Business
-
-Бот должен быть подключён к Telegram Business аккаунту. В Bot API такие сообщения приходят как `business_message`; приложение пытается разобрать только сообщения, похожие на банковское пополнение. Остальной чат бот игнорирует.
-
-После совпадения бот отправляет `ADMIN_TELEGRAM_ID` короткое уведомление о продаже.
+Команда `/whoami` у NOTHING-бота показывает Telegram ID, который можно записать в `ADMIN_TELEGRAM_ID`.
 
 ## Docker Compose
 
@@ -96,37 +123,8 @@ docker compose up -d --build
 Поднимутся:
 
 - `db` — PostgreSQL;
-- `web` — FastAPI + сайт на `127.0.0.1:8000`;
-- `bot` — Telegram Business обработчик.
-
-## Прод-деплой на nothing.itskadi.uz
-
-Сначала DNS A-запись `nothing.itskadi.uz` должна указывать на IP VPS.
-
-```bash
-cd /opt
-git clone git@github.com:supportkadi-sudo/nothing-.git nothing
-cd /opt/nothing
-cp .env.example .env
-nano .env
-```
-
-После заполнения `.env`:
-
-```bash
-docker compose up -d --build
-sudo cp deploy/nginx.conf /etc/nginx/sites-available/nothing.itskadi.uz
-sudo ln -sfn /etc/nginx/sites-available/nothing.itskadi.uz /etc/nginx/sites-enabled/nothing.itskadi.uz
-sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d nothing.itskadi.uz
-```
-
-Проверка:
-
-```bash
-curl http://127.0.0.1:8000/api/health
-curl -I https://nothing.itskadi.uz
-```
+- `web` — FastAPI + сайт на `127.0.0.1:8010`;
+- `bot` — обычный Telegram-бот для `/start`, `/whoami` и административных уведомлений.
 
 ## API
 
@@ -136,8 +134,15 @@ curl -I https://nothing.itskadi.uz
 - `POST /api/orders`
 - `GET /api/orders/{public_id}`
 - `GET /api/stats`
+- `POST /api/internal/payment-message` — только с internal secret.
 
-Публичного endpoint «подтвердить оплату» нет. Статус `paid` выставляет только обработчик Telegram Business после совпадения банковского сообщения с заказом.
+Публичного endpoint «подтвердить оплату» нет. Статус `paid` выставляется только после разбора доверенного банковского события и точного совпадения с заказом.
+
+## Проверки
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ## Статистика
 
