@@ -6,3 +6,4 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', '').strip()
 ADMIN_TELEGRAM_ID = int(os.getenv('ADMIN_TELEGRAM_ID', '0') or 0)
 PAYMENT_CARD_NUMBER = os.getenv('PAYMENT_CARD_NUMBER', '').strip()
 PAYMENT_CARD_LABEL = os.getenv('PAYMENT_CARD_LABEL', 'HUMOCARD').strip() or 'HUMOCARD'
+INTERNAL_PAYMENT_SECRET = os.getenv('INTERNAL_PAYMENT_SECRET', '').strip()
